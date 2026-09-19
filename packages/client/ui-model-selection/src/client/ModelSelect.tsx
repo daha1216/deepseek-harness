@@ -129,6 +129,17 @@ export function ModelSelect(
     return () => { document.removeEventListener('mousedown', closeOutside) }
   }, [open])
 
+  // A row commits on the pointer release, not on the click the browser may
+  // synthesize afterwards. Selecting closes the pane, and that re-render
+  // replaces the pressed button before the release, so the release lands
+  // elsewhere and no click is ever delivered — engines that separate mousedown
+  // from mouseup by a full re-render (iOS Safari) lose every row that way.
+  // pointerup precedes mousedown, so it wins that race; where a click does
+  // follow, committedRef suppresses it as the duplicate. A press that travels
+  // is a scroll, not a tap.
+  const pressRef = useRef<{ rowId: string; x: number; y: number } | null>(null)
+  const committedRef = useRef<string | null>(null)
+
   // A pane switch unmounts the row that had focus, which drops focus onto the
   // page body — outside the card's subtree, where its key handling no longer
   // sees a keystroke. Every switch therefore names where the keyboard lands:
@@ -416,6 +427,7 @@ export function ModelSelect(
                       <div className={css.groupTitle} id={headingId}>{group.name}</div>
                       {group.models.map((model) => {
                         const selected = state.current?.provider === group.id && state.current.model === model.id
+                        const rowId = `${group.id}/${model.id}`
                         return (
                           <button
                             ref={itemRef()}
@@ -426,7 +438,25 @@ export function ModelSelect(
                             key={model.id}
                             title={model.name}
                             disabled={busy}
-                            onClick={() => { choose({ provider: group.id, model: model.id }) }}
+                            onPointerDown={(ev) => {
+                              committedRef.current = null
+                              pressRef.current = { rowId, x: ev.clientX, y: ev.clientY }
+                            }}
+                            onPointerUp={(ev) => {
+                              const press = pressRef.current
+                              pressRef.current = null
+                              if (press === null || press.rowId !== rowId) return
+                              if (Math.abs(ev.clientX - press.x) > 8 || Math.abs(ev.clientY - press.y) > 8) return
+                              committedRef.current = rowId
+                              choose({ provider: group.id, model: model.id })
+                            }}
+                            onClick={() => {
+                              if (committedRef.current === rowId) {
+                                committedRef.current = null
+                                return
+                              }
+                              choose({ provider: group.id, model: model.id })
+                            }}
                           >
                             <span className={css.optionCopy}>
                               <span className={css.modelName}>{model.name}</span>
